@@ -13,3 +13,84 @@ library(purrr)
 library(leaflet)
 library(jsonlite)
 ```
+
+```{r}
+raw <- read_json("data/wildfires.geojson")
+length(raw$features)
+```
+
+```{r}
+first_fire <- raw$features[[1]]
+names(first_fire)
+first_fire$geometry$coordinates[[1]][[1]]
+```
+
+```{r}
+#| cache: true
+
+fires <- tibble(features = raw$features) |>
+  unnest_wider(features) |>
+  unnest_wider(properties) |>
+  unnest_wider(geometry, names_sep = "_") |>
+  select(incident, gis_acres, fire_year, agency, state, geometry_coordinates) |>
+  mutate(
+    gis_acres = as.numeric(gis_acres),
+    fire_year = as.integer(fire_year)
+  )
+```
+
+```{r}
+fires |>
+  summarize(total_acres = sum(gis_acres), .by = fire_year) |>
+  arrange(fire_year) |>
+  ggplot(aes(x = fire_year, y = total_acres)) +
+  geom_line(color = "firebrick", linewidth = 0.9) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  labs(
+    title = "Total Acres Burned by Wildfires per Year (1990–2023)",
+    subtitle = "Annual burned acreage peaked sharply during the 2020 and 2021 fire seasons",
+    x = "Year",
+    y = "Total Acres Burned",
+    caption = "Source: National Interagency Fire Center (NIFC)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+big_fires <- fires |>
+  filter(gis_acres >= 100000) |>
+  mutate(
+    lon = map_dbl(geometry_coordinates, \(coords) mean(map_dbl(coords[[1]], 1))),
+    lat = map_dbl(geometry_coordinates, \(coords) mean(map_dbl(coords[[1]], 2)))
+  )
+```
+
+```{r}
+top_10 <- big_fires |>
+  slice_max(gis_acres, n = 10)
+
+reduce(
+  seq_len(nrow(top_10)),
+  .init = leaflet() |>
+    addTiles() |>
+    setView(lng = -112, lat = 38, zoom = 5),
+  \(map, i) {
+    ring <- top_10$geometry_coordinates[[i]][[1]]
+    map |>
+      addPolygons(
+        lng = map_dbl(ring, 1),
+        lat = map_dbl(ring, 2),
+        color = "firebrick",
+        weight = 2,
+        fillOpacity = 0.5,
+        popup = paste0(
+          top_10$incident[[i]], " (", top_10$fire_year[[i]], "): ",
+          scales::comma(round(top_10$gis_acres[[i]])), " acres"
+        )
+      )
+  }
+)
+```
+
+
+
